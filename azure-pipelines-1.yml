@@ -1,0 +1,110 @@
+name: $(rev:r)
+
+trigger:
+  branches:
+    include:
+      - master
+
+pr: none
+
+variables:
+  - name: serviceConnection
+    value: sc-su-gu-prd-intune
+  - name: storageaccountname
+    value: 'stintuneguprd001'
+  - name: publicNetworkAccess
+    value: "Enabled"
+  - name: resource_group
+    value: 'rg-prd-intune-storage'
+  - name: location
+    value: 'westeurope'
+  - name: Filesharename1
+    value: 'icons'
+  - name: Filesharename2
+    value: 'wallpapers'
+
+
+resources:
+  repositories:
+    - repository: BasePipeline
+      type: GitHub
+      name: Gasunie-Azure/AzureLandingZone
+      ref: refs/tags/BasePipelineV4
+      endpoint: Gasunie-Azure
+
+extends:
+  template: /ADO/BasePipeline/pipelines/basetemplate.yml@BasePipeline
+  parameters:
+      buildstages:
+        - stage: Build
+          displayName: Build Communication Service
+          jobs:
+            - job: DeterminePrerequisites
+              displayName: Determine Prerequisites
+              pool:
+                vmImage: windows-latest
+              steps:
+                - task: DownloadPackage@1
+                  displayName: 'Download Storage Account package'
+                  inputs:
+                    packageType: 'upack'
+                    feed: 'Catalog-Gasunie'
+                    view: 'Release'
+                    definition: 'storageaccount'
+                    version: '*'
+                    downloadPath: '$(System.ArtifactsDirectory)\StorageAccount'
+                - publish: '$(System.ArtifactsDirectory)'
+                  artifact: 'catalog'
+      deploymentstages:
+        - stage: PRD
+          displayName: Deploy Storage Account
+          jobs:
+            - deployment:
+              displayName: Deploy Storage Account
+              pool:
+                vmImage: windows-latest
+              environment: Intune-PRD
+              strategy:
+                runOnce:
+                  deploy:
+                    steps:
+                      - task: AzureCLI@2
+                        displayName: 'Deploy $(resource_group) resource group'        
+                        inputs:
+                          azureSubscription: $(serviceConnection)
+                          scriptType: 'pscore'
+                          scriptLocation: 'inlineScript'
+                          inlineScript: |
+                            az group create --name $(resource_group) --location $(location)
+                      - task: AzureResourceManagerTemplateDeployment@3
+                        displayName: 'Deploy Storage Account'
+                        inputs:
+                          deploymentScope: 'Resource Group'
+                          azureResourceManagerConnection: $(serviceConnection)
+                          action: 'Create Or Update Resource Group'
+                          location: $(location)
+                          resourceGroupName: $(resource_group)
+                          templateLocation: 'Linked artifact'
+                          csmFile: '$(Pipeline.Workspace)\catalog\StorageAccount\templates\azuredeploy.bicep'
+                          overrideParameters: >-
+                            -name $(storageaccountname)
+                            -publicNetworkAccess $(publicNetworkAccess)
+                          deploymentMode: 'Incremental'
+                      - task: AzureCLI@2
+                        displayName: 'Create File Share 1'
+                        inputs:
+                          azureSubscription: $(serviceConnection)
+                          scriptType: 'bash'
+                          scriptLocation: 'inlineScript'
+                          inlineScript: |
+                            az storage share create --name $(Filesharename1) --account-name $(storageaccountname) 
+                          workingDirectory: '$(System.DefaultWorkingDirectory)'
+                      - task: AzureCLI@2
+                        displayName: 'Create File Share 2'
+                        inputs:
+                          azureSubscription: $(serviceConnection)
+                          scriptType: 'bash'
+                          scriptLocation: 'inlineScript'
+                          inlineScript: |
+                            az storage share create --name $(Filesharename2) --account-name $(storageaccountname) 
+                          workingDirectory: '$(System.DefaultWorkingDirectory)'
